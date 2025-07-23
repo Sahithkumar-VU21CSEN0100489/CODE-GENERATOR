@@ -1,3 +1,6 @@
 google-generativeai
 Flask
 python-dotenv
+Flask-Session
+pyvirtualdisplay
+Pillow
