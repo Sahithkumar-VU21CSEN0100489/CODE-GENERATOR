@@ -159,6 +159,8 @@ button { padding: 8px 18px; border: none; border-radius: 4px; background: #007bf
 button:hover { background: #0056b3; }
 .review { margin-top: 30px; background: #e9ecef; padding: 18px; border-radius: 6px; }
 .preview-img { display: block; margin: 18px auto 0 auto; max-width: 100%; border: 1px solid #ccc; border-radius: 8px; }
+.start-over-btn { display: block; margin: 32px auto 0 auto; padding: 12px 36px; background: #dc3545; color: #fff; border: none; border-radius: 6px; font-size: 1.1rem; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+.start-over-btn:hover { background: #b52a37; }
 </style>
 </head>
 <body>
@@ -192,6 +194,9 @@ button:hover { background: #0056b3; }
             <h3>Code Review</h3>
             <div class="scroll-box">{{ review }}</div>
         </div>
+        <form method="get" action="/">
+            <button type="submit" class="start-over-btn">Start Over</button>
+        </form>
     </div>
     <div id="project-preview-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.4); z-index:9999; align-items:center; justify-content:center;">
   <div style="background:#fff; padding:30px; border-radius:10px; max-width:900px; max-height:90vh; overflow:auto; position:relative;">
@@ -239,7 +244,7 @@ button:hover { background: #0056b3; }
     function previewHTML(fileIndex) {
         var code = document.querySelector('#content-' + fileIndex + ' pre code').innerText;
         var htmlDiv = document.getElementById('preview-html-' + fileIndex);
-        htmlDiv.innerHTML = '<iframe style="width:100%;min-height:350px;border:1px solid #ccc;border-radius:8px;margin-top:12px;" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>';
+        htmlDiv.innerHTML = '<iframe style="width:100%;min-height:350px;border:1px solid #ccc;border-radius:8px;margin-top:12px;" sandbox="allow-scripts allow-forms"></iframe>';
         var iframe = htmlDiv.querySelector('iframe');
         iframe.srcdoc = code;
     }
@@ -252,7 +257,7 @@ button:hover { background: #0056b3; }
     .then(resp => resp.json())
     .then(data => {
       if (data.type === 'html') {
-        contentDiv.innerHTML = '<iframe style="width:100%;min-height:500px;border:1px solid #ccc;border-radius:8px;" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>';
+        contentDiv.innerHTML = '<iframe style="width:100%;min-height:500px;border:1px solid #ccc;border-radius:8px;" sandbox="allow-scripts allow-forms"></iframe>';
         var iframe = contentDiv.querySelector('iframe');
         iframe.srcdoc = data.content;
       } else if (data.type === 'image') {

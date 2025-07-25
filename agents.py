@@ -28,23 +28,25 @@ except Exception as e:
 def run_prompt_engineer(user_task: str) -> str:
     """
     Takes a user's task and generates a detailed, actionable prompt for the developer agent.
-    
+    If the user's request is vague or simple, suggests advanced features and asks for clarification.
     Args:
         user_task: The high-level task description from the user.
-        
     Returns:
         A detailed prompt string.
     """
     print("\n🤖 Prompt Engineer Agent is running...")
-    
+
     system_prompt = f"""
 You are an expert Prompt Engineer AI. Your job is to take the following user's request and convert it into a detailed, unambiguous, and actionable prompt for a developer AI. The prompt must be directly and specifically about the user's request, and should not ignore, generalize, or change the intent of the user's input.
 
 User Request: "{user_task}"
 
-Generate a detailed prompt for a developer to implement exactly what the user asked for. Do not add unrelated information. Do not write any code yourself. If the user request is ambiguous, ask for clarification in the prompt.
+If the user's request is vague, simple, or could benefit from advanced features, do the following:
+- Suggest a list of advanced features (e.g., responsiveness, accessibility, modern UI/UX, error handling, history, theming, keyboard support, etc.) that could be added to the project.
+- Ask the user for clarification or if they want any of these advanced features included.
+- Otherwise, generate a detailed prompt for a developer to implement exactly what the user asked for.
+Do not write any code yourself.
 """
-    
     try:
         model = genai.GenerativeModel('gemini-2.5-pro')
         response = model.generate_content(system_prompt)
@@ -58,6 +60,7 @@ Generate a detailed prompt for a developer to implement exactly what the user as
 def run_developer(engineered_prompt: str) -> str:
     """
     Takes a detailed prompt and generates the corresponding code and requirements.txt.
+    Always considers best practices, modern UI/UX, and advanced features.
     Args:
         engineered_prompt: The detailed specification from the Prompt Engineer.
     Returns:
@@ -70,12 +73,14 @@ You are an expert Developer AI. Your job is to write a complete, runnable projec
 
 Requirements:
 - If the user's request is for a user interface (UI) and does not specify a desktop GUI framework, generate a web UI using HTML, CSS, and JavaScript by default.
+- Always use best practices for code quality, security, and maintainability.
+- Always consider modern UI/UX, responsiveness, accessibility, error handling, and advanced features (such as history, theming, keyboard support, etc.) where appropriate.
 - Output as many files as needed for the user's request (e.g., index.html, style.css, script.js, requirements.txt, .env, README.md, etc.).
 - For each file, use the following format:
   ---file:<filename>---
   <file content>
 - Do not include explanations, markdown formatting, or extra text—only the files in the format above.
-- If the task is ambiguous, make reasonable assumptions.
+- If the task is ambiguous, make reasonable assumptions and document them in a README.md file.
 
 Specification:
 ---
@@ -84,7 +89,6 @@ Specification:
 
 Generate all required files now.
 """
-
     try:
         model = genai.GenerativeModel('gemini-2.5-pro')
         response = model.generate_content(system_prompt)
@@ -124,7 +128,7 @@ Provide your review in the above structure.
 """
 
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(system_prompt)
         print("✅ Code Reviewer finished.")
         return response.text
@@ -169,13 +173,27 @@ threading.Thread(target=take_screenshot, daemon=True).start()
         return None
 
 
-def run_project_preview(files):
+def run_project_preview(files, preview_mode='auto'):
     """
-    Given a list of files (dicts with 'filename' and 'content'), writes them to a temp dir and previews the project.
-    Returns a dict: {'type': 'html', 'content': ...} or {'type': 'image', 'content': ...} or {'type': 'error', 'content': ...}
+    Advanced preview agent: Detects and runs many project types, streams output, parses .env, and supports user-selectable preview mode.
+    Returns a dict: {'type': 'html'|'image'|'text'|'error', 'content': ...}
     """
     import shutil
+    import requests
+    import time
+    import threading
+    import socket
+    import sys
+    import subprocess
+    import os
+    import re
+    import json
+    from pathlib import Path
     try:
+        # Check if npm is available
+        from shutil import which
+        if which('npm') is None:
+            return {'type': 'error', 'content': "Node.js/npm is not installed or not in your PATH. Please install Node.js from https://nodejs.org/ and ensure 'npm' is available in your system PATH."}
         with tempfile.TemporaryDirectory() as tmpdir:
             # Write all files
             for file in files:
@@ -183,19 +201,61 @@ def run_project_preview(files):
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(file['content'])
-            # Detect project type
+            # Parse .env if present
+            env_vars = os.environ.copy()
+            env_path = os.path.join(tmpdir, '.env')
+            if os.path.exists(env_path):
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if '=' in line and not line.strip().startswith('#'):
+                            k, v = line.strip().split('=', 1)
+                            env_vars[k] = v
+            # Helper: stream CLI output
+            def stream_cli(cmd, cwd):
+                try:
+                    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env_vars, text=True)
+                    output = ''
+                    for line in iter(proc.stdout.readline, ''):
+                        output += line
+                    proc.stdout.close()
+                    proc.wait()
+                    return output
+                except Exception as e:
+                    return f'Error running CLI: {e}'
+            # HTML preview (static)
             html_path = os.path.join(tmpdir, 'index.html')
+            css_content = None
+            for file in files:
+                if file['filename'].lower() == 'style.css':
+                    css_content = file['content']
+            if os.path.exists(html_path) and (preview_mode in ['auto', 'web']):
+                with open(html_path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+                # Inline CSS
+                if css_content:
+                    style_tag = f'<style>\n{css_content}\n</style>'
+                    if re.search(r'<head[^>]*>', html_content, re.IGNORECASE):
+                        html_content = re.sub(r'(<head[^>]*>)', r'\1\n' + style_tag, html_content, count=1, flags=re.IGNORECASE)
+                    else:
+                        html_content = style_tag + '\n' + html_content
+                # Inline JS
+                js_content = None
+                for file in files:
+                    if file['filename'].lower() == 'script.js':
+                        js_content = file['content']
+                if js_content:
+                    script_tag = f'<script>\n{js_content}\n</script>'
+                    if re.search(r'</body>', html_content, re.IGNORECASE):
+                        html_content = re.sub(r'(</body>)', script_tag + r'\1', html_content, count=1, flags=re.IGNORECASE)
+                    else:
+                        html_content += script_tag
+                return {'type': 'html', 'content': html_content}
+            # Tkinter
             tkinter_py = None
             for file in files:
                 if file['filename'].endswith('.py') and ('import tkinter' in file['content'] or 'from tkinter' in file['content']):
                     tkinter_py = os.path.join(tmpdir, file['filename'])
-            if os.path.exists(html_path):
-                # Web project: return HTML content
-                with open(html_path, 'r', encoding='utf-8') as f:
-                    html_content = f.read()
-                return {'type': 'html', 'content': html_content}
-            elif tkinter_py:
-                # Tkinter project: run and return screenshot
+            if tkinter_py and (preview_mode in ['auto', 'image']):
                 img_path = os.path.join(tmpdir, 'preview.png')
                 wrapped_code = f"""
 import sys
@@ -211,18 +271,269 @@ def take_screenshot():
 
 threading.Thread(target=take_screenshot, daemon=True).start()
 """
-                # Prepend screenshot code to main tkinter file
                 with open(tkinter_py, 'r', encoding='utf-8') as f:
                     orig_code = f.read()
                 with open(tkinter_py, 'w', encoding='utf-8') as f:
                     f.write(wrapped_code + orig_code)
                 with Display():
-                    subprocess.run(['python', tkinter_py], timeout=10)
+                    subprocess.run(['python', tkinter_py], timeout=10, env=env_vars)
                 with open(img_path, 'rb') as imgf:
                     img_bytes = imgf.read()
                 return {'type': 'image', 'content': img_bytes}
-            else:
-                return {'type': 'error', 'content': 'No previewable entry point (index.html or Tkinter .py) found.'}
+            # Next.js, Vue, Svelte, React (CRA)
+            for root, dirs, files_in_dir in os.walk(tmpdir):
+                if 'package.json' in files_in_dir:
+                    pkg_path = os.path.join(root, 'package.json')
+                    with open(pkg_path, 'r', encoding='utf-8') as f:
+                        pkg_text = f.read()
+                    try:
+                        pkg = json.loads(pkg_text)
+                    except json.JSONDecodeError as e:
+                        return {'type': 'error', 'content': f'Invalid package.json: {e}\n\nContent:\n{pkg_text[:500]}'}
+                    # --- React (CRA) ---
+                    if pkg.get('dependencies', {}).get('react') or pkg.get('devDependencies', {}).get('react'):
+                        try:
+                            subprocess.run(['npm', 'install'], cwd=root, timeout=120, env=env_vars)
+                            # Try npm start (dev server)
+                            try:
+                                proc = subprocess.Popen(['npm', 'start'], cwd=root, env=env_vars)
+                                # Wait up to 90 seconds for dev server
+                                for _ in range(90):
+                                    try:
+                                        resp = requests.get('http://127.0.0.1:3000', timeout=1)
+                                        if resp.status_code == 200:
+                                            proc.terminate()
+                                            return {'type': 'html', 'content': resp.text}
+                                    except Exception:
+                                        time.sleep(1)
+                                proc.terminate()
+                                # If dev server didn't start, try static build
+                                build_dir = os.path.join(root, 'build')
+                                subprocess.run(['npm', 'run', 'build'], cwd=root, timeout=120, env=env_vars)
+                                if os.path.exists(build_dir):
+                                    # Serve build/ with python http.server
+                                    try:
+                                        build_proc = subprocess.Popen([sys.executable, '-m', 'http.server', '3002'], cwd=build_dir, env=env_vars)
+                                        for _ in range(30):
+                                            try:
+                                                resp = requests.get('http://127.0.0.1:3002', timeout=1)
+                                                if resp.status_code == 200:
+                                                    build_proc.terminate()
+                                                    return {'type': 'html', 'content': resp.text}
+                                            except Exception:
+                                                time.sleep(1)
+                                        build_proc.terminate()
+                                        return {'type': 'error', 'content': 'React static build server did not start in time.'}
+                                    except Exception as e:
+                                        return {'type': 'error', 'content': f'Failed to serve React static build: {e}'}
+                                else:
+                                    return {'type': 'error', 'content': 'React build/ folder not found after build.'}
+                            except Exception as e:
+                                return {'type': 'error', 'content': f'Failed to start React dev server or build: {e}'}
+                        except Exception as e:
+                            return {'type': 'error', 'content': f'Failed to run React app: {e}'}
+                    # --- Next.js ---
+                    if pkg.get('dependencies', {}).get('next') or pkg.get('devDependencies', {}).get('next'):
+                        try:
+                            subprocess.run(['npm', 'install'], cwd=root, timeout=60, env=env_vars)
+                            subprocess.run(['npm', 'run', 'build'], cwd=root, timeout=60, env=env_vars)
+                            proc = subprocess.Popen(['npm', 'start'], cwd=root, env=env_vars)
+                            for _ in range(40):
+                                try:
+                                    resp = requests.get('http://127.0.0.1:3000', timeout=1)
+                                    if resp.status_code == 200:
+                                        proc.terminate()
+                                        return {'type': 'html', 'content': resp.text}
+                                except Exception:
+                                    time.sleep(1)
+                            proc.terminate()
+                            return {'type': 'error', 'content': 'Next.js app did not start in time.'}
+                        except Exception as e:
+                            return {'type': 'error', 'content': f'Failed to run Next.js app: {e}'}
+                    # --- Vue ---
+                    if pkg.get('dependencies', {}).get('vue') or pkg.get('devDependencies', {}).get('vue'):
+                        try:
+                            subprocess.run(['npm', 'install'], cwd=root, timeout=60, env=env_vars)
+                            proc = subprocess.Popen(['npm', 'run', 'serve'], cwd=root, env=env_vars)
+                            for _ in range(40):
+                                try:
+                                    resp = requests.get('http://127.0.0.1:8080', timeout=1)
+                                    if resp.status_code == 200:
+                                        proc.terminate()
+                                        return {'type': 'html', 'content': resp.text}
+                                except Exception:
+                                    time.sleep(1)
+                            proc.terminate()
+                            return {'type': 'error', 'content': 'Vue app did not start in time.'}
+                        except Exception as e:
+                            return {'type': 'error', 'content': f'Failed to run Vue app: {e}'}
+                    # --- Svelte ---
+                    if pkg.get('dependencies', {}).get('svelte') or pkg.get('devDependencies', {}).get('svelte'):
+                        try:
+                            subprocess.run(['npm', 'install'], cwd=root, timeout=60, env=env_vars)
+                            proc = subprocess.Popen(['npm', 'run', 'dev'], cwd=root, env=env_vars)
+                            for _ in range(40):
+                                try:
+                                    resp = requests.get('http://127.0.0.1:5173', timeout=1)
+                                    if resp.status_code == 200:
+                                        proc.terminate()
+                                        return {'type': 'html', 'content': resp.text}
+                                except Exception:
+                                    time.sleep(1)
+                            proc.terminate()
+                            return {'type': 'error', 'content': 'Svelte app did not start in time.'}
+                        except Exception as e:
+                            return {'type': 'error', 'content': f'Failed to run Svelte app: {e}'}
+            # FastAPI
+            for file in files:
+                if file['filename'].endswith('.py') and ('from fastapi' in file['content'] or 'import fastapi' in file['content']):
+                    py_path = os.path.join(tmpdir, file['filename'])
+                    try:
+                        proc = subprocess.Popen([sys.executable, '-m', 'uvicorn', f'{Path(file['filename']).stem}:app', '--port', '8000'], cwd=tmpdir, env=env_vars)
+                        for _ in range(40):
+                            try:
+                                resp = requests.get('http://127.0.0.1:8000', timeout=1)
+                                if resp.status_code == 200:
+                                    proc.terminate()
+                                    return {'type': 'html', 'content': resp.text}
+                            except Exception:
+                                time.sleep(1)
+                        proc.terminate()
+                        return {'type': 'error', 'content': 'FastAPI app did not start in time.'}
+                    except Exception as e:
+                        return {'type': 'error', 'content': f'Failed to run FastAPI app: {e}'}
+            # Ruby on Rails
+            for root, dirs, files_in_dir in os.walk(tmpdir):
+                if 'Gemfile' in files_in_dir and 'config.ru' in files_in_dir:
+                    try:
+                        subprocess.run(['bundle', 'install'], cwd=root, timeout=60, env=env_vars)
+                        proc = subprocess.Popen(['rails', 'server', '-p', '3001'], cwd=root, env=env_vars)
+                        for _ in range(40):
+                            try:
+                                resp = requests.get('http://127.0.0.1:3001', timeout=1)
+                                if resp.status_code == 200:
+                                    proc.terminate()
+                                    return {'type': 'html', 'content': resp.text}
+                            except Exception:
+                                time.sleep(1)
+                        proc.terminate()
+                        return {'type': 'error', 'content': 'Rails app did not start in time.'}
+                    except Exception as e:
+                        return {'type': 'error', 'content': f'Failed to run Rails app: {e}'}
+            # CLI preview (stream output)
+            if preview_mode in ['auto', 'cli']:
+                main_py = None
+                for file in files:
+                    if file['filename'] in ['main.py', 'app.py', 'server.py']:
+                        main_py = os.path.join(tmpdir, file['filename'])
+                        break
+                if main_py:
+                    output = stream_cli([sys.executable, main_py], tmpdir)
+                    return {'type': 'text', 'content': output}
+            # --- MERN/Full-stack JS logic (as before) ---
+            docker_compose_path = os.path.join(tmpdir, 'docker-compose.yml')
+            if os.path.exists(docker_compose_path) and (preview_mode in ['auto', 'web']):
+                try:
+                    frontend_port = 3000
+                    proc = subprocess.Popen(['docker-compose', 'up'], cwd=tmpdir, env=env_vars)
+                    for _ in range(40):
+                        try:
+                            resp = requests.get(f'http://127.0.0.1:{frontend_port}', timeout=1)
+                            if resp.status_code == 200:
+                                proc.terminate()
+                                return {'type': 'html', 'content': resp.text}
+                        except Exception:
+                            time.sleep(1)
+                    proc.terminate()
+                    return {'type': 'error', 'content': 'docker-compose up did not start frontend in time.'}
+                except Exception as e:
+                    return {'type': 'error', 'content': f'Failed to run docker-compose: {e}'}
+            backend_dir = None
+            frontend_dir = None
+            for root, dirs, files_in_dir in os.walk(tmpdir):
+                if 'package.json' in files_in_dir:
+                    with open(os.path.join(root, 'package.json'), 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        if 'express' in content or 'mongoose' in content:
+                            backend_dir = root
+                        if 'react' in content:
+                            frontend_dir = root
+            if backend_dir and frontend_dir and (preview_mode in ['auto', 'web']):
+                try:
+                    subprocess.run(['npm', 'install'], cwd=backend_dir, timeout=60, env=env_vars)
+                    subprocess.run(['npm', 'install'], cwd=frontend_dir, timeout=60, env=env_vars)
+                    backend_proc = subprocess.Popen(['npm', 'start'], cwd=backend_dir, env=env_vars)
+                    frontend_proc = subprocess.Popen(['npm', 'start'], cwd=frontend_dir, env=env_vars)
+                    frontend_port = 3000
+                    for _ in range(40):
+                        try:
+                            resp = requests.get(f'http://127.0.0.1:{frontend_port}', timeout=1)
+                            if resp.status_code == 200:
+                                backend_proc.terminate()
+                                frontend_proc.terminate()
+                                return {'type': 'html', 'content': resp.text}
+                        except Exception:
+                            time.sleep(1)
+                    backend_proc.terminate()
+                    frontend_proc.terminate()
+                    return {'type': 'error', 'content': 'MERN app did not start frontend in time.'}
+                except Exception as e:
+                    return {'type': 'error', 'content': f'Failed to run MERN app: {e}'}
+            # 3. Fallback: Ask Gemini to summarize or simulate output
+            try:
+                import google.generativeai as genai
+                summary_prompt = """
+You are an expert developer. The following files were generated for a project, but there is no direct previewable entry point. Please summarize what this project does and, if possible, simulate what a user would see or experience if they ran it.\n\nIf this is a full-stack JS (MERN) app, please tell the user to run backend and frontend locally, or use docker-compose if present.\n\nFiles:
+"""
+                for file in files:
+                    summary_prompt += f"\n---file:{file['filename']}---\n{file['content']}\n"
+                model = genai.GenerativeModel('gemini-2.5-pro')
+                response = model.generate_content(summary_prompt)
+                # Detect MERN/full-stack JS
+                is_mern = False
+                if backend_dir and frontend_dir:
+                    is_mern = True
+                elif os.path.exists(docker_compose_path):
+                    try:
+                        with open(docker_compose_path, 'r', encoding='utf-8') as f:
+                            dc_content = f.read().lower()
+                            if 'node' in dc_content or 'react' in dc_content:
+                                is_mern = True
+                    except Exception:
+                        pass
+                if is_mern:
+                    custom_msg = "<div style='color:#b52a37;font-weight:bold;margin-bottom:12px;'>\nThis is a full-stack JS (MERN) project. To preview, run the backend and frontend locally as described in the README, or use docker-compose if available.\n</div>"
+                    return {'type': 'text', 'content': custom_msg + response.text}
+                else:
+                    return {'type': 'text', 'content': response.text}
+            except Exception as e:
+                return {'type': 'error', 'content': f'No previewable entry point (index.html or Tkinter .py) found, and could not summarize: {e}'}
     except Exception as e:
         print(f"Project preview failed: {e}")
         return {'type': 'error', 'content': f'Preview failed: {e}'}
+
+# Feedback loop logic (to be integrated in the main app, but add a helper here):
+def run_feedback_loop(user_feedback: str, previous_prompt: str) -> str:
+    """
+    Takes user feedback about dissatisfaction and generates a clarifying prompt for the developer agent to improve the code.
+    Args:
+        user_feedback: The user's feedback about what was unsatisfactory.
+        previous_prompt: The previous prompt given to the developer agent.
+    Returns:
+        An improved prompt string for the developer agent.
+    """
+    print("\n🔄 Feedback Loop Agent is running...")
+    system_prompt = f"""
+You are an expert Prompt Engineer AI. The user was not satisfied with the previous code. Here is their feedback:
+"""
+    system_prompt += f"\nUser Feedback: {user_feedback}\n"
+    system_prompt += f"\nPrevious Prompt: {previous_prompt}\n"
+    system_prompt += "\nGenerate a new, improved, and more detailed prompt for the developer agent that addresses the user's feedback and requests."
+    try:
+        model = genai.GenerativeModel('gemini-2.5-pro')
+        response = model.generate_content(system_prompt)
+        print("✅ Feedback Loop finished.")
+        return response.text
+    except Exception as e:
+        print(f"Error during Feedback Loop execution: {e}")
+        return f"Error: Could not generate improved prompt. Details: {e}"
